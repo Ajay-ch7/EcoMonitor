@@ -1,0 +1,68 @@
+name: land-emissions-monitor
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  image: land-emissions-monitor-backend
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-emissions}:${POSTGRES_PASSWORD:-emissions}@db:5432/${POSTGRES_DB:-emissions}
+    SMTP_HOST: mailhog
+    SMTP_PORT: "1025"
+  volumes:
+    - ./:/srv
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-emissions}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-emissions}
+      POSTGRES_DB: ${POSTGRES_DB:-emissions}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    <<: *backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+
+  worker:
+    <<: *backend
+    command: python -m app.jobs.scheduler
+
+  web:
+    image: node:22-alpine
+    working_dir: /web
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    environment:
+      API_PROXY_TARGET: http://api:8000
+    volumes:
+      - ./web:/web
+      - web_node_modules:/web/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+volumes:
+  pgdata:
+  web_node_modules:
